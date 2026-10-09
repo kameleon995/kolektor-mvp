@@ -5,18 +5,68 @@ import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-ca
 import { File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
+// Properties encoded in the item's DataMatrix code.
 type Item = {
-  data: string;
-  scannedAt: string;
+  materialIndex: string;
+  series: string;
+  manufacturer: string;
+  productionDate: string;
+  serialNumber: string;
+  netMass: string;
 };
 
-// TODO: analyze the decoded DataMatrix content.
-function analyzeCode(data: string) {}
+// GS1 application identifiers used by the label generator.
+const AI_FIELDS: Record<string, keyof Item> = {
+  '241': 'materialIndex',
+  '10': 'series',
+  '251': 'manufacturer',
+  '11': 'productionDate', // yymmdd
+  '21': 'serialNumber', // series/scale/number
+  '96': 'netMass',
+};
+
+// Parses a GS1 DataMatrix like "(241)ABC123<GS>(10)S12345<GS>(251)Inzynier_SA<GS>
+// (11)261009(21)S12345/1/001<GS>(96)123.4". Each value runs until the next GS
+// (after variable-length values) or the next bracketed identifier.
+function analyzeCode(data: string): Item {
+  const fields: Item = {
+    materialIndex: '',
+    series: '',
+    manufacturer: '',
+    productionDate: '',
+    serialNumber: '',
+    netMass: '',
+  };
+  for (const [, ai, value] of data.matchAll(/\((\d+)\)([^(\x1d]*)/g)) {
+    const field = AI_FIELDS[ai];
+    if (field) fields[field] = value;
+  }
+
+  const date = fields.productionDate;
+  if (/^\d{6}$/.test(date)) {
+    fields.productionDate = `20${date.slice(0, 2)}-${date.slice(2, 4)}-${date.slice(4, 6)}`;
+  }
+
+  return fields;
+}
+
+const CSV_COLUMNS: (keyof Item)[] = [
+  'serialNumber',
+  'materialIndex',
+  'series',
+  'manufacturer',
+  'productionDate',
+  'netMass',
+];
 
 function toCsv(items: Item[]) {
-  const escape = (value: string) => `"${value.replace(/"/g, '""')}"`;
-  const rows = items.map((item) => [item.data, item.scannedAt].map(escape).join(','));
-  return ['data,scannedAt', ...rows].join('\n');
+  // Quote only values that would otherwise break the CSV.
+  const escape = (value: string) =>
+    /[";\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+  const rows = items.map((item, index) =>
+    [String(index + 1), ...CSV_COLUMNS.map((column) => escape(item[column]))].join(';'),
+  );
+  return [['no', ...CSV_COLUMNS].join(';'), ...rows].join('\n');
 }
 
 export default function App() {
@@ -39,8 +89,8 @@ export default function App() {
   function onScanned({ data }: BarcodeScanningResult) {
     if (data === lastScanned.current) return;
     lastScanned.current = data;
-    analyzeCode(data);
-    setItems((prev) => [...prev, { data, scannedAt: new Date().toISOString() }]);
+    const item = analyzeCode(data);
+    setItems((prev) => [...prev, item]);
   }
 
   async function exportCsv() {
@@ -86,7 +136,11 @@ export default function App() {
       <FlatList
         data={items}
         keyExtractor={(_, index) => String(index)}
-        renderItem={({ item }) => <Text style={styles.item}>{item.data}</Text>}
+        renderItem={({ item }) => (
+          <Text style={styles.item}>
+            {`${item.materialIndex} · ${item.serialNumber} · ${item.netMass}`}
+          </Text>
+        )}
         ListEmptyComponent={<Text style={styles.item}>No codes scanned yet.</Text>}
       />
       <StatusBar style="auto" />
