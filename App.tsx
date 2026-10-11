@@ -1,5 +1,13 @@
 import { useRef, useState } from 'react';
-import { Alert, Button, FlatList, StyleSheet, Text, View } from 'react-native';
+import {
+  Alert,
+  Button,
+  FlatList,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { BarcodeScanningResult, CameraView, useCameraPermissions } from 'expo-camera';
 import { File, Paths } from 'expo-file-system';
@@ -69,9 +77,15 @@ function toCsv(items: Item[]) {
   return [['no', ...CSV_COLUMNS].join(';'), ...rows].join('\n');
 }
 
+// The camera view spans the screen width; the aiming square sits in its middle.
+const CAMERA_HEIGHT = 300;
+const TARGET_SIZE = 200;
+
 export default function App() {
+  const { width: cameraWidth } = useWindowDimensions();
   const [permission, requestPermission] = useCameraPermissions();
   const [items, setItems] = useState<Item[]>([]);
+  const [notice, setNotice] = useState('');
   const lastScanned = useRef<string | null>(null);
 
   if (!permission) return <View />;
@@ -85,11 +99,29 @@ export default function App() {
     );
   }
 
-  // The camera reports the same code many times per second, so skip repeats.
-  function onScanned({ data }: BarcodeScanningResult) {
+  function onScanned({ data, cornerPoints }: BarcodeScanningResult) {
+    // Only accept codes whose centre is inside the aiming square. Corner points
+    // are given in the camera view's coordinates.
+    if (cornerPoints.length === 0) return;
+    const centerX = cornerPoints.reduce((sum, point) => sum + point.x, 0) / cornerPoints.length;
+    const centerY = cornerPoints.reduce((sum, point) => sum + point.y, 0) / cornerPoints.length;
+    if (
+      Math.abs(centerX - cameraWidth / 2) > TARGET_SIZE / 2 ||
+      Math.abs(centerY - CAMERA_HEIGHT / 2) > TARGET_SIZE / 2
+    ) {
+      return;
+    }
+
+    // The camera reports the same code many times per second, so skip repeats.
     if (data === lastScanned.current) return;
     lastScanned.current = data;
     const item = analyzeCode(data);
+    // Packages are uniquely identified by their serial number.
+    if (items.some((existing) => existing.serialNumber === item.serialNumber)) {
+      setNotice(`${item.serialNumber} is already on the list`);
+      return;
+    }
+    setNotice('');
     setItems((prev) => [...prev, item]);
   }
 
@@ -107,6 +139,7 @@ export default function App() {
         style: 'destructive',
         onPress: () => {
           setItems([]);
+          setNotice('');
           lastScanned.current = null;
         },
       },
@@ -133,6 +166,7 @@ export default function App() {
         <Button title="Export CSV" onPress={exportCsv} disabled={items.length === 0} />
         <Button title="Clear" onPress={clear} disabled={items.length === 0} />
       </View>
+      {notice ? <Text style={styles.notice}>{notice}</Text> : null}
       <FlatList
         data={items}
         keyExtractor={(_, index) => String(index)}
@@ -151,7 +185,7 @@ export default function App() {
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 40, backgroundColor: '#fff' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
-  camera: { height: 300 },
+  camera: { height: CAMERA_HEIGHT },
   overlay: {
     position: 'absolute',
     top: 0,
@@ -163,12 +197,13 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   dim: {
-    width: 200 + 2 * 1000,
-    height: 200 + 2 * 1000,
+    width: TARGET_SIZE + 2 * 1000,
+    height: TARGET_SIZE + 2 * 1000,
     borderWidth: 1000,
     borderColor: 'rgba(0, 0, 0, 0.5)',
   },
   target: { flex: 1, borderWidth: 2, borderColor: '#fff' },
   buttons: { flexDirection: 'row', justifyContent: 'space-around', padding: 8 },
+  notice: { padding: 8, textAlign: 'center', color: '#b00020' },
   item: { padding: 12, borderBottomWidth: 1, borderColor: '#eee' },
 });
