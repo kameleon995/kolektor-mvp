@@ -24,7 +24,7 @@ type Item = {
 };
 
 // GS1 application identifiers used by the label generator.
-const AI_FIELDS: Record<string, keyof Item> = {
+const CODE_FIELDS: Record<string, keyof Item> = {
   '241': 'materialIndex',
   '10': 'series',
   '251': 'manufacturer',
@@ -45,8 +45,8 @@ function analyzeCode(data: string): Item {
     serialNumber: '',
     netMass: '',
   };
-  for (const [, ai, value] of data.matchAll(/\((\d+)\)([^(\x1d]*)/g)) {
-    const field = AI_FIELDS[ai];
+  for (const [, fieldCode, value] of data.matchAll(/\((\d+)\)([^(\x1d]*)/g)) {
+    const field = CODE_FIELDS[fieldCode];
     if (field) fields[field] = value;
   }
 
@@ -68,7 +68,7 @@ const CSV_COLUMNS: (keyof Item)[] = [
 ];
 
 function toCsv(items: Item[]) {
-  // Quote only values that would otherwise break the CSV.
+  // remove unprintables from the values and quote any value that contains a quote, semicolon or newline
   const escape = (value: string) =>
     /[";\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
   const rows = items.map((item, index) =>
@@ -116,7 +116,7 @@ export default function App() {
     if (data === lastScanned.current) return;
     lastScanned.current = data;
     const item = analyzeCode(data);
-    // Packages are uniquely identified by their serial number.
+    // Packages are uniquely identified by their serial number so we can filter what we scan, no need to add duplicates.
     if (items.some((existing) => existing.serialNumber === item.serialNumber)) {
       setNotice(`${item.serialNumber} is already on the list`);
       return;
@@ -154,8 +154,6 @@ export default function App() {
           barcodeScannerSettings={{ barcodeTypes: ['datamatrix'] }}
           onBarcodeScanned={onScanned}
         />
-        {/* One view with a huge semi-transparent border dims everything around a
-            clear square; separate dim views would leave visible seams between them. */}
         <View style={styles.overlay} pointerEvents="none">
           <View style={styles.dim}>
             <View style={styles.target} />
